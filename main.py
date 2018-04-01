@@ -1,4 +1,3 @@
-
 import torch
 from torch.autograd import Variable
 import os 
@@ -12,10 +11,37 @@ from loss import *
 from data_utils import custom_dset, collate_fn
 import time
 from tensorboardX import SummaryWriter
+import argparse
 
-writer = SummaryWriter()
+# writer = SummaryWriter()
 
-
+parser = argparse.ArgumentParser(description='PyTorch EAST Training')
+parser.add_argument('--data-img', required=True,
+                    help='path to img dataset')
+parser.add_argument('--data-txt', required=True,
+                    help='path to label dataset')
+parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+                    help='number of data loading workers (default: 4)')
+parser.add_argument('--epochs', default=1500, type=int, metavar='N',
+                    help='number of total epochs to run')
+parser.add_argument('-b', '--batch-size', default=16, type=int,
+                    metavar='N', help='mini-batch size (default: 256)')
+parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+                    metavar='LR', help='initial learning rate')
+parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
+                    help='momentum')
+parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
+                    metavar='W', help='weight decay (default: 1e-4)')
+parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
+                    help='evaluate model on validation set')
+parser.add_argument('--print-freq', default=10, type=int,
+                    metavar='N', help='print frequency (default: 10)')
+parser.add_argument('--save-freq', default=500, type=int,
+                    metavar='N', help='save frequency (default: 500)')
+parser.add_argument('--pretrained', dest='pretrained', default='',
+                    help='use pre-trained model')
+parser.add_argument('--resume', default='', type=str, metavar='PATH',
+                    help='path to latest checkpoint (default: none)')
 
 def train(epochs, model, trainloader, crit, optimizer,
          scheduler, save_step, weight_decay):
@@ -46,7 +72,7 @@ def train(epochs, model, trainloader, crit, optimizer,
         during = time.time() - start
         print("Loss : {:.6f}, Time:{:.2f} s ".format(loss/len(trainloader), during))
         print()
-        writer.add_scalar('loss', loss / len(trainloader), e)
+        # writer.add_scalar('loss', loss / len(trainloader), e)
         
         if (e + 1) % save_step == 0:
             if not os.path.exists('./checkpoints'):
@@ -55,32 +81,39 @@ def train(epochs, model, trainloader, crit, optimizer,
         
 
 def main():
-    root_path = '/home/mathu/Documents/express_recognition/data/telephone_txt/result/'
-    train_img = root_path + 'print_pic'
-    train_txt = root_path + 'print_txt'
-    # root_path = '/home/mathu/Documents/express_recognition/data/icdar2015/'
-    # train_img = root_path + 'train2015'
-    # train_txt = root_path + 'train_label'
+    global args
+    args = parser.parse_args()
 
-    trainset = custom_dset(train_img, train_txt)
-    trainloader = DataLoader(
-                    trainset, batch_size=16, shuffle=True, collate_fn=collate_fn, num_workers=4)
-    model = East()
-    model = model.cuda()
-    model.load_state_dict(torch.load('./checkpoints_total/model_1440.pth'))
+    print (args.data_img)
+    print (args.data_txt)
+    train_data = custom_dset(args.data_img, args.data_txt)
+    train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True,
+                              collate_fn=collate_fn, num_workers=args.workers)
+
+    model = East(args.pretrained)
+    # model = model.cuda()
+    model = torch.nn.DataParallel(model).cuda()
+
+    if args.resume:
+        if os.path.isfile(args.resume):
+            print("=> loading checkpoint '{}'".format(args.resume))
+            pretrained_dict = torch.load(args.resume)
+            model.load_state_dict(pretrained_dict, strict=True)
+            print("=> loaded checkpoint '{}'".format(args.resume))
+        else:
+            print("=> no checkpoint found at '{}'".format(args.resume))
 
     crit = LossFunc()
-    weight_decay = 0
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-                                #  weight_decay=1)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = lr_scheduler.StepLR(optimizer, step_size=10000, 
                                     gamma=0.94)   
     
-    train(epochs=1500, model=model, trainloader=trainloader,
+    train(epochs=args.epochs, model=model, trainloader=train_loader,
           crit=crit, optimizer=optimizer,scheduler=scheduler, 
-          save_step=20, weight_decay=weight_decay)
+          save_step=args.save_freq, weight_decay=args.weight_decay)
 
-    write.close()
+    # write.close()
 
 if __name__ == "__main__":
     main()

@@ -151,7 +151,7 @@ class ResNet(nn.Module):
 
 
 
-def resnet50(pretrained=False, **kwargs):
+def resnet50(pretrained, **kwargs):
     """Constructs a ResNet-50 model.
 
     Args:
@@ -159,7 +159,10 @@ def resnet50(pretrained=False, **kwargs):
     """
     model = ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
     if pretrained:
-        model.load_state_dict(torch.load("./resnet50-19c8e357.pth"))
+        print (('==> loading pretrained state dict from %s' % pretrained))
+        model.load_state_dict(torch.load(pretrained))
+        print ("==> loading pretrained state dict done")
+
     return model
 
 def mean_image_subtraction(images, means=[123.68, 116.78, 103.94]):
@@ -178,9 +181,9 @@ def mean_image_subtraction(images, means=[123.68, 116.78, 103.94]):
     return images
 
 class East(nn.Module):
-    def __init__(self):
+    def __init__(self, pretrain):
         super(East, self).__init__()
-        self.resnet = resnet50(True)
+        self.resnet = resnet50(pretrain)
         self.conv1 = nn.Conv2d(3072, 128, 1)
         self.bn1 = nn.BatchNorm2d(128)
         self.relu1 = nn.ReLU()
@@ -218,6 +221,7 @@ class East(nn.Module):
         self.unpool1 = nn.Upsample(scale_factor=2, mode='bilinear')
         self.unpool2 = nn.Upsample(scale_factor=2, mode='bilinear')
         self.unpool3 = nn.Upsample(scale_factor=2, mode='bilinear')
+
     def forward(self,images):
         images = mean_image_subtraction(images)
         _, f = self.resnet(images)
