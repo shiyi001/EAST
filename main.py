@@ -6,12 +6,15 @@ from torch.optim import lr_scheduler
 from torch.nn.utils.rnn import pack_padded_sequence
 from torch.utils.data import DataLoader
 from torchvision import transforms
-from model import East
-from loss import *
 from data_utils import custom_dset, collate_fn
 import time
 from tensorboardX import SummaryWriter
 import argparse
+import logging
+
+from utils import *
+from model import East
+from loss import *
 
 # writer = SummaryWriter()
 
@@ -34,26 +37,30 @@ parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)')
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
-parser.add_argument('--print-freq', default=10, type=int,
-                    metavar='N', help='print frequency (default: 10)')
-parser.add_argument('--save-freq', default=500, type=int,
-                    metavar='N', help='save frequency (default: 500)')
+parser.add_argument('--print-freq', default=1, type=int,
+                    metavar='N', help='print frequency (default: 1)')
+parser.add_argument('--save-freq', default=30, type=int,
+                    metavar='N', help='save frequency (default: 30 epochs)')
 parser.add_argument('--pretrained', dest='pretrained', default='',
                     help='use pre-trained model')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 
-def train(epochs, model, trainloader, crit, optimizer,
+def train(epochs, model, train_loader, crit, optimizer,
          scheduler, save_step, weight_decay):
 
-    for e in range(epochs):
-        print('*'* 10)
-        print('Epoch {} / {}'.format(e + 1, epochs))
-        model.train()
-        start = time.time()
-        loss = 0.0
-        total = 0.0
-        for i, (img, score_map, geo_map, training_mask) in enumerate(trainloader):
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+    losses = AverageMeter()
+    logger = logging.getLogger('global')
+
+    model.train()
+    for epoch in range(epochs):
+        # model.train()
+        end = time.time()
+        for iter, (img, score_map, geo_map, training_mask) in enumerate(train_loader):
+            data_time.update(time.time() - end)
+
             scheduler.step()
             optimizer.zero_grad()
     
@@ -62,46 +69,55 @@ def train(epochs, model, trainloader, crit, optimizer,
             geo_map = Variable(geo_map.cuda())
             training_mask = Variable(training_mask.cuda())
             f_score, f_geometry = model(img)
-            loss1 = crit(score_map, f_score, geo_map, f_geometry, training_mask)
-            
-            loss += loss1.data[0]
-            
-            loss1.backward()
+            loss = crit(score_map, f_score, geo_map, f_geometry, training_mask)
+            losses.update(loss.data[0], img.size(0))
+
+            loss.backward()
             optimizer.step()
-        
-        during = time.time() - start
-        print("Loss : {:.6f}, Time:{:.2f} s ".format(loss/len(trainloader), during))
-        print()
-        # writer.add_scalar('loss', loss / len(trainloader), e)
-        
-        if (e + 1) % save_step == 0:
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if (iter % args.print_freq == 0):
+                logger.info('Epoch: [{0}][{1}/{2}]\t'
+                            'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                            'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                            'Loss {loss.val:.4f} ({loss.avg:.4f}))'.format(
+                    epoch, iter, len(train_loader), batch_time=batch_time,
+                    data_time=data_time, loss=losses))
+
+        if (epoch + 1) % save_step == 0:
             if not os.path.exists('./checkpoints'):
                 os.mkdir('./checkpoints')
-            torch.save(model.state_dict(), './checkpoints/model_{}.pth'.format(e + 1))
+            torch.save(model.state_dict(), './checkpoints/model_{}.pth'.format(epoch + 1))
         
 
 def main():
     global args
     args = parser.parse_args()
+    init_log('global', logging.INFO)
+    logger = logging.getLogger('global')
 
-    print (args.data_img)
-    print (args.data_txt)
     train_data = custom_dset(args.data_img, args.data_txt)
     train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True,
                               collate_fn=collate_fn, num_workers=args.workers)
+    logger.info("==============Build Dataset Done==============")
 
     model = East(args.pretrained)
-    # model = model.cuda()
+    logger.info("==============Build Model Done================")
+    logger.info(model)
+
     model = torch.nn.DataParallel(model).cuda()
 
     if args.resume:
         if os.path.isfile(args.resume):
-            print("=> loading checkpoint '{}'".format(args.resume))
+            logger.info("=> loading checkpoint '{}'".format(args.resume))
             pretrained_dict = torch.load(args.resume)
             model.load_state_dict(pretrained_dict, strict=True)
-            print("=> loaded checkpoint '{}'".format(args.resume))
+            logger.info("=> loaded checkpoint '{}'".format(args.resume))
         else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
+            logger.info("=> no checkpoint found at '{}'".format(args.resume))
 
     crit = LossFunc()
 
@@ -109,11 +125,9 @@ def main():
     scheduler = lr_scheduler.StepLR(optimizer, step_size=10000, 
                                     gamma=0.94)   
     
-    train(epochs=args.epochs, model=model, trainloader=train_loader,
+    train(epochs=args.epochs, model=model, train_loader=train_loader,
           crit=crit, optimizer=optimizer,scheduler=scheduler, 
           save_step=args.save_freq, weight_decay=args.weight_decay)
-
-    # write.close()
 
 if __name__ == "__main__":
     main()
